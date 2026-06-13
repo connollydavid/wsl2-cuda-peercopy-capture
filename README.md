@@ -1,16 +1,15 @@
 # `cudaMemcpyPeerAsync` rejected during CUDA stream capture on WSL2
 
-Minimal reproducer for a WSL2-specific CUDA limitation: **`cudaMemcpyPeerAsync`
-fails with `operation not permitted when stream is capturing` when issued inside
-a stream capture**, even though peer-to-peer access is enabled, the same copy
-succeeds outside capture, and single-GPU graph capture works. The
-*semantically identical* transfer expressed as `cudaMemcpyAsync(...,
-cudaMemcpyDeviceToDevice)` over peer-enabled pointers **is** accepted during
-capture — so this is an inconsistency in the WSL2 driver's capture support, not
-a fundamental P2P or graph limitation.
+Minimal reproducer for a WSL2-specific CUDA stream-capture limitation.
 
-On native Linux with the same hardware, `cudaMemcpyPeerAsync` captures fine (it
-becomes a memcpy node in the graph).
+**The crux:** on WSL2, `cudaMemcpyPeerAsync` issued inside a stream capture fails
+with `operation not permitted when stream is capturing`, while the
+*semantically identical* peer transfer expressed as
+`cudaMemcpyAsync(..., cudaMemcpyDeviceToDevice)` over peer-enabled pointers is
+**accepted** during capture. Same two GPUs, same NVLink, same bytes, yet one API
+is capturable and the other is not. Peer access is enabled, the peer copy
+succeeds outside capture, and single-GPU graph capture works. Only
+`cudaMemcpyPeerAsync` issued during capture fails.
 
 ## Environment
 
@@ -19,46 +18,46 @@ becomes a memcpy node in the graph).
 | Platform | WSL2 (`6.18.33.1-microsoft-standard-WSL2`) |
 | GPUs | 2× Quadro RTX 6000 (Turing TU102), NVLink, P2P enabled |
 | WSL display driver | 610.47 |
-| CUDA toolkit | 13.3 (V13.3.33); also reproduced under 13.2 |
+| CUDA toolkit | 13.3 (V13.3.33); reproduced identically under 13.2 |
 
 ## Build & run
 
 ```sh
-make run         # builds and runs both binaries
-# or:
-nvcc -o repro repro.cu && ./repro
-nvcc -o workaround workaround.cu && ./workaround
+make run          # builds and runs both binaries
+# or individually:
+nvcc -o repro repro.cu             && ./repro
+nvcc -o workaround workaround.cu   && ./workaround
 ```
 
-Requires two P2P-capable GPUs.
+Requires two P2P-capable GPUs. `repro` exits 0 when the failure reproduces;
+`workaround` exits 0 when both mitigations succeed. Captured reference output is
+in [`EXPECTED-OUTPUT.txt`](EXPECTED-OUTPUT.txt).
 
-## What the reproducer shows
+## What `repro` shows
 
-`repro.cu` isolates the failure by confirming everything *around* it works:
+It confirms everything *around* the failure works, so the failure is isolated to
+one API/context combination:
 
 ```
-[1]  canAccessPeer 0<->1 = 1          ; cudaDeviceEnablePeerAccess -> no error
-[2]  single-GPU stream capture        -> no error  (begin/end/instantiate/launch)
+[1]  canAccessPeer 0<->1 = 1   ; cudaDeviceEnablePeerAccess -> no error
+[2]  single-GPU stream capture -> no error  (begin / end / instantiate / launch)
 [3]  cudaMemcpyPeerAsync OUTSIDE capture -> no error
-[4]  cudaMemcpyPeerAsync INSIDE capture  -> operation not permitted when stream is capturing
-       cudaStreamEndCapture            -> operation failed due to a previous error during capture
+[4]  cudaMemcpyPeerAsync INSIDE  capture -> operation not permitted when stream is capturing
+       cudaStreamEndCapture           -> operation failed due to a previous error during capture
 ```
 
-Only case **[4]** fails. P2P works, capture works, peer copy works — only the
-*combination* is rejected.
+Only case **[4]** fails.
 
 ## Mitigation
 
-Peer access being enabled means the remote device pointer is directly
-addressable on the local device via UVA. The same byte-for-byte transfer can
-therefore be expressed in two capture-compatible forms, both demonstrated in
-`workaround.cu` and both verified on the environment above:
+With peer access enabled, the remote device pointer is directly addressable on
+the local device via UVA, so the same transfer can be issued in a capturable
+form. `workaround.cu` demonstrates two, both verified to capture, instantiate,
+replay, and produce the correct cross-device result (`1.0 + 2.0 == 3.0`):
 
 **(A) `cudaMemcpyAsync(dst, src, n, cudaMemcpyDeviceToDevice, stream)`** —
-recommended. The drop-in replacement. With peer access enabled the runtime
-performs the identical direct peer transfer over NVLink/PCIe; it is captured as
-a memcpy node. Apply it only while a capture is active and keep
-`cudaMemcpyPeerAsync` on the non-capture path:
+recommended drop-in. Captured as a memcpy node. Issue it only while a capture is
+active and keep `cudaMemcpyPeerAsync` on the non-capture path:
 
 ```c
 if (capture_active) {
@@ -69,29 +68,41 @@ if (capture_active) {
 }
 ```
 
-Preconditions: `cudaDeviceEnablePeerAccess` has been called for the relevant
-device pair (otherwise the DtoD copy degrades to a host-staged copy instead of a
-direct peer transfer), and both pointers are plain UVA device allocations.
+Preconditions: `cudaDeviceEnablePeerAccess` has been called for the device pair
+(otherwise the DtoD copy stages through the host instead of taking the direct
+peer path), and both pointers are plain UVA device allocations.
 
 **(B) a peer-access kernel** — a kernel on the local device that dereferences the
-remote pointer directly (loads/stores over enabled peer access). Captured as a
-kernel node. Useful when the transfer is already fused with computation (e.g. a
-reduce/accumulate), since it avoids a separate copy entirely.
+remote pointer directly. Captured as a kernel node. Useful when the transfer is
+already fused with computation (e.g. a reduce/accumulate), avoiding a separate
+copy.
 
-Both forms capture, instantiate, replay, and produce correct results
-(`workaround.cu` checks `1.0 + 2.0 == 3.0` across the peer boundary).
+## Expected behaviour / why this looks like a driver bug
+
+Both forms in `workaround.cu` produce the same peer transfer as the rejected
+`cudaMemcpyPeerAsync`, and the WSL2 driver captures both without complaint. The rejection in case [4] is
+therefore an inconsistency in capture support for one API, not a fundamental P2P
+or graph-capture limitation. Per the CUDA Programming Guide, peer memcpy
+operations are representable as graph memcpy nodes and are expected to be
+capturable.
+
+> Not verified in this repo's environment: behaviour on native (non-WSL) Linux.
+> This reproducer was run only on WSL2. The claim above rests on the CUDA
+> Programming Guide and on the internal inconsistency shown here, both of which
+> are independent of a native-Linux comparison.
 
 ## Why it matters
 
-Graph capture/replay collapses many individual kernel/copy launches into a
-single graph submission. Under WSL2 each CUDA launch crosses the
-paravirtualization boundary, so per-launch overhead is *higher* than native —
-making graph capture more valuable on WSL2, not less. A single non-capturable
-`cudaMemcpyPeerAsync` in a multi-GPU decode/reduce path forces the entire path
-back to eager dispatch, forfeiting that gain. Mitigation (A) restores it.
+CUDA graph capture/replay collapses many individual launches into a single graph
+submission. On WSL2 each CUDA launch crosses the paravirtualization boundary, so
+per-launch overhead is *higher* than native, which makes capture more valuable on
+WSL2, not less. A single `cudaMemcpyPeerAsync` in a multi-GPU decode/reduce path
+forces that path back to eager dispatch and forfeits the gain. Mitigation (A)
+restores it with no change to the non-capture path.
 
 ## Files
 
-- `repro.cu` — isolates the failure (cases [1]–[4]).
+- `repro.cu` — isolates the failure (cases [1]–[4]); prints a `RESULT:` verdict.
 - `workaround.cu` — demonstrates the two capturable mitigations (A) and (B).
+- `EXPECTED-OUTPUT.txt` — captured output of both binaries.
 - `Makefile` — `make`, `make run`, `make clean`.

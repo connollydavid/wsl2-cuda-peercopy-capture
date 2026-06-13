@@ -1,0 +1,47 @@
+# Captured on WSL2 (6.18.33.1-microsoft-standard-WSL2), 2x Quadro RTX 6000,
+# WSL display driver 610.47, CUDA 13.3 (V13.3.33). Reproduced identically under CUDA 13.2.
+
+$ ./repro
+CUDA runtime 13.3, driver reports 13.3, 2 device(s)
+
+[1] peer access:
+  canAccessPeer 0->1=1  1->0=1
+  cudaDeviceEnablePeerAccess(1, 0)                         -> no error
+  cudaDeviceEnablePeerAccess(0, 0)                         -> no error
+
+[2] single-GPU stream capture (begin/end/instantiate/launch):
+  cudaStreamBeginCapture(s, cudaStreamCaptureModeThreadLocal) -> no error
+  cudaMemcpyAsync(b0, a0, 1024, cudaMemcpyDeviceToDevice, s) -> no error
+  cudaStreamEndCapture(s, &g)                              -> no error
+  cudaGraphInstantiate(&ge, g, 0)                          -> no error
+  cudaGraphLaunch(ge, s)                                   -> no error
+  cudaStreamSynchronize(s)                                 -> no error
+
+[3] cudaMemcpyPeerAsync OUTSIDE capture:
+  cudaStreamSynchronize(s)                                 -> no error
+  cudaMemcpyPeerAsync                                      -> no error
+
+[4] cudaMemcpyPeerAsync INSIDE capture:
+  cudaStreamBeginCapture(s, cudaStreamCaptureModeThreadLocal) -> no error
+  cudaMemcpyPeerAsync                                      -> operation not permitted when stream is capturing
+  cudaStreamEndCapture                                     -> operation failed due to a previous error during capture
+
+RESULT: REPRODUCED -- cudaMemcpyPeerAsync rejected during capture, accepted outside
+[exit 0]
+
+$ ./workaround
+[A] peer-access KERNEL inside capture (dev0 kernel reads dev1 ptr):
+  cudaStreamBeginCapture(s, cudaStreamCaptureModeThreadLocal) -> no error
+  cudaStreamEndCapture                                     -> no error
+  cudaGraphInstantiate(&ge, g, 0)                          -> no error
+  cudaGraphLaunch(ge, s)                                   -> no error
+  cudaStreamSynchronize(s)                                 -> no error
+  result local0[0] = 3.0 (expect 3.0)
+
+[B] cudaMemcpyAsync(DeviceToDevice, peer ptrs) inside capture:
+  cudaStreamBeginCapture(s, cudaStreamCaptureModeThreadLocal) -> no error
+  cudaMemcpyAsync(D2D, peer)                               -> no error
+  cudaStreamEndCapture                                     -> no error
+
+RESULT: kernel-node mitigation [A] OK; memcpy-node mitigation [B] OK
+[exit 0]

@@ -1,65 +1,83 @@
 // Minimal reproducer: cudaMemcpyPeerAsync is rejected during CUDA stream
-// capture on WSL2, even though P2P is enabled and the copy succeeds outside
-// capture. Single-GPU capture and peer copies in isolation both work; only
-// the *combination* (peer copy issued while a stream is capturing) fails.
+// capture on WSL2, even though peer access is enabled, the same copy succeeds
+// outside capture, and single-GPU graph capture works. Only the *combination*
+// (a peer copy issued while a stream is capturing) fails.
 //
 // Build: nvcc -o repro repro.cu
 // Run:   ./repro            (requires 2 P2P-capable GPUs)
+//
+// Exit status: 0 if the failure reproduced, 1 if it did not, 2 on setup error.
 #include <cstdio>
 #include <cuda_runtime.h>
 
-#define CK(call) do { cudaError_t e = (call); \
-  printf("  %-55s -> %s\n", #call, cudaGetErrorString(e)); } while(0)
+// Hard check for setup calls that MUST succeed; bail clearly if they don't.
+#define MUST(call) do { cudaError_t e_ = (call); if (e_ != cudaSuccess) { \
+    fprintf(stderr, "[setup error] %s: %s\n", #call, cudaGetErrorString(e_)); \
+    return 2; } } while (0)
 
-#define CKq(call) do { cudaError_t e = (call); if (e != cudaSuccess) { \
-  printf("    [err] %s: %s\n", #call, cudaGetErrorString(e)); } } while(0)
+// Report-and-continue for the calls under test.
+#define SHOW(call) do { cudaError_t e_ = (call); \
+    printf("  %-56s -> %s\n", #call, cudaGetErrorString(e_)); } while (0)
 
 int main() {
-  int n = 0;
-  cudaGetDeviceCount(&n);
-  printf("device count: %d\n\n", n);
+    int rt = 0, drv = 0, n = 0;
+    cudaRuntimeGetVersion(&rt);
+    cudaDriverGetVersion(&drv);
+    MUST(cudaGetDeviceCount(&n));
+    printf("CUDA runtime %d.%d, driver reports %d.%d, %d device(s)\n\n",
+           rt / 1000, (rt % 1000) / 10, drv / 1000, (drv % 1000) / 10, n);
+    if (n < 2) { fprintf(stderr, "need 2 P2P-capable GPUs, found %d\n", n); return 2; }
 
-  // 1. P2P capability
-  printf("[1] P2P canAccessPeer matrix:\n");
-  for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) if (i != j) {
-    int can = -1; cudaDeviceCanAccessPeer(&can, i, j);
-    printf("  %d->%d canAccessPeer=%d\n", i, j, can);
-  }
-  printf("\n[1b] cudaDeviceEnablePeerAccess:\n");
-  if (n >= 2) { cudaSetDevice(0); CK(cudaDeviceEnablePeerAccess(1, 0)); }
+    // [1] P2P is available and enable succeeds.
+    printf("[1] peer access:\n");
+    int can01 = 0, can10 = 0;
+    MUST(cudaDeviceCanAccessPeer(&can01, 0, 1));
+    MUST(cudaDeviceCanAccessPeer(&can10, 1, 0));
+    printf("  canAccessPeer 0->1=%d  1->0=%d\n", can01, can10);
+    if (!can01 || !can10) { fprintf(stderr, "GPUs are not P2P-capable; this repro needs P2P\n"); return 2; }
+    MUST(cudaSetDevice(0)); SHOW(cudaDeviceEnablePeerAccess(1, 0));
+    MUST(cudaSetDevice(1)); SHOW(cudaDeviceEnablePeerAccess(0, 0));
 
-  // 2. Single-GPU stream capture round-trip
-  printf("\n[2] single-GPU stream capture (instantiate + launch):\n");
-  cudaSetDevice(0);
-  cudaStream_t s; cudaStreamCreate(&s);
-  float *a, *b; cudaMalloc(&a, 1024); cudaMalloc(&b, 1024);
-  cudaGraph_t g; cudaGraphExec_t ge;
-  CK(cudaStreamBeginCapture(s, cudaStreamCaptureModeThreadLocal));
-  CKq(cudaMemcpyAsync(b, a, 1024, cudaMemcpyDeviceToDevice, s));
-  CK(cudaStreamEndCapture(s, &g));
-  CK(cudaGraphInstantiate(&ge, g, 0));
-  CK(cudaGraphLaunch(ge, s));
-  CK(cudaStreamSynchronize(s));
+    MUST(cudaSetDevice(0));
+    cudaStream_t s; MUST(cudaStreamCreate(&s));
+    void *a0, *b0, *d1;
+    MUST(cudaMalloc(&a0, 1024));
+    MUST(cudaMalloc(&b0, 1024));
+    MUST(cudaSetDevice(1)); MUST(cudaMalloc(&d1, 1024));
+    MUST(cudaSetDevice(0));
 
-  // 3. Peer copy OUTSIDE capture
-  printf("\n[3] cudaMemcpyPeerAsync OUTSIDE capture:\n");
-  if (n >= 2) {
-    float *d1; cudaSetDevice(1); cudaMalloc(&d1, 1024);
-    cudaSetDevice(0);
-    CK(cudaMemcpyPeerAsync(d1, 1, a, 0, 1024, s));
-    CK(cudaStreamSynchronize(s));
-  }
+    // [2] single-GPU stream capture round-trips fine.
+    printf("\n[2] single-GPU stream capture (begin/end/instantiate/launch):\n");
+    cudaGraph_t g; cudaGraphExec_t ge;
+    SHOW(cudaStreamBeginCapture(s, cudaStreamCaptureModeThreadLocal));
+    SHOW(cudaMemcpyAsync(b0, a0, 1024, cudaMemcpyDeviceToDevice, s));
+    SHOW(cudaStreamEndCapture(s, &g));
+    SHOW(cudaGraphInstantiate(&ge, g, 0));
+    SHOW(cudaGraphLaunch(ge, s));
+    SHOW(cudaStreamSynchronize(s));
 
-  // 4. Peer copy INSIDE capture -- the failure
-  printf("\n[4] cudaMemcpyPeerAsync INSIDE capture:\n");
-  if (n >= 2) {
-    float *d1; cudaSetDevice(1); cudaMalloc(&d1, 1024);
-    cudaSetDevice(0);
-    cudaGraph_t g2;
-    CK(cudaStreamBeginCapture(s, cudaStreamCaptureModeThreadLocal));
-    CKq(cudaMemcpyPeerAsync(d1, 1, a, 0, 1024, s));
-    cudaError_t ec = cudaStreamEndCapture(s, &g2);
-    printf("  cudaStreamEndCapture -> %s\n", cudaGetErrorString(ec));
-  }
-  return 0;
+    // [3] peer copy OUTSIDE capture succeeds.
+    printf("\n[3] cudaMemcpyPeerAsync OUTSIDE capture:\n");
+    cudaError_t out_err = cudaMemcpyPeerAsync(d1, 1, a0, 0, 1024, s);
+    SHOW(cudaStreamSynchronize(s));
+    printf("  cudaMemcpyPeerAsync                                      -> %s\n",
+           cudaGetErrorString(out_err));
+
+    // [4] peer copy INSIDE capture -- the failure under test.
+    printf("\n[4] cudaMemcpyPeerAsync INSIDE capture:\n");
+    cudaGraph_t g2 = nullptr;
+    SHOW(cudaStreamBeginCapture(s, cudaStreamCaptureModeThreadLocal));
+    cudaError_t in_err  = cudaMemcpyPeerAsync(d1, 1, a0, 0, 1024, s);
+    printf("  cudaMemcpyPeerAsync                                      -> %s\n",
+           cudaGetErrorString(in_err));
+    cudaError_t end_err = cudaStreamEndCapture(s, &g2);
+    printf("  cudaStreamEndCapture                                     -> %s\n",
+           cudaGetErrorString(end_err));
+
+    // Verdict: the bug is "peer copy ok outside capture, rejected inside".
+    bool reproduced = (out_err == cudaSuccess) && (in_err != cudaSuccess);
+    printf("\nRESULT: %s\n", reproduced
+        ? "REPRODUCED -- cudaMemcpyPeerAsync rejected during capture, accepted outside"
+        : "NOT REPRODUCED on this system");
+    return reproduced ? 0 : 1;
 }
