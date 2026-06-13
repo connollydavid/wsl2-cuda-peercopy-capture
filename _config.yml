@@ -1,0 +1,13 @@
+title: Capturing peer-to-peer copies in CUDA graphs
+description: >-
+  Technical note + runnable demo: cudaMemcpyPeerAsync isn't capturable into a
+  CUDA graph; capture a peer-to-peer copy as a DeviceToDevice UVA memcpy or a
+  peer-access kernel. Confirmed identical on WSL2 and native Linux.
+theme: jekyll-theme-cayman
+show_downloads: false
+exclude:
+  - Makefile
+  - "*.cu"
+  - "*.txt"
+  - LICENSE
+  - CLAUDE.md
