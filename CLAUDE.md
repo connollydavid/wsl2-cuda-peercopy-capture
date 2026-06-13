@@ -5,13 +5,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this repo is
 
 A minimal, self-contained reproducer for a single CUDA stream-capture limitation:
-on WSL2, `cudaMemcpyPeerAsync` issued *inside* a stream capture fails with
+`cudaMemcpyPeerAsync` issued *inside* a stream capture fails with
 `operation not permitted when stream is capturing`, even though the same peer
 copy succeeds outside capture and the semantically identical
 `cudaMemcpyAsync(..., cudaMemcpyDeviceToDevice)` over peer-enabled pointers *is*
-accepted during capture. This is not an application — it is evidence. Each `.cu`
-file isolates one facet of the failure or a mitigation, and the captured text
-outputs are the artifact.
+accepted during capture. First surfaced on WSL2 and **confirmed identical on
+native Linux** (same byte-identical CUDA 13.3 install, two kernel/boot contexts),
+so it is general CUDA behaviour, not a WSL bug. This is not an application — it is
+evidence. Each `.cu` file isolates one facet of the failure or a mitigation, and
+the captured text outputs are the artifact.
 
 ## Build & run
 
@@ -42,24 +44,28 @@ error**; `workaround` exits **0 = both mitigations succeeded**.
   (recommended drop-in). Both capture, instantiate, replay, and produce the
   correct cross-device result.
 - `matrix.cu` → `matrix-wsl2.txt` — the platform-neutral sweep: every peer-copy
-  API × capture mode × peer-access state, emitting one table row each. This is
-  the file meant to be run on a *second* platform and diffed.
+  API × capture mode × peer-access state, emitting one table row each. Built to be
+  run on a *second* platform and diffed; the native-Linux run is done and
+  byte-for-byte identical (see below).
 - `EXPECTED-OUTPUT.txt` — captured stdout of `repro` and `workaround` on the
   reference WSL2 box. Update this only when the source genuinely changes the
   output, and re-capture on real hardware — do not hand-edit.
 
-## The one open question that governs how to write here
+## The central question — RESOLVED
 
-Whether this is a **WSL-specific driver bug** or **general CUDA behaviour** is
-*not yet settled*. It is decided by one experiment: run `matrix.cu` on native
-(non-WSL) Linux with the same 2× P2P GPUs and diff against `matrix-wsl2.txt`. The
-deciding row is `cudaMemcpyPeerAsync` inside capture — `no error` on native means
-WSL bug, `operation not permitted` on native means general behaviour. See
-`NATIVE-TEST.md`; the native run is tracked as GitHub issue #1, and the produced
-`matrix-native.txt` is gitignored until pasted there.
+Whether this is a **WSL-specific driver bug** or **general CUDA behaviour** was
+the repo's one open question. It is now **settled: general CUDA behaviour, not a
+WSL bug.** Running `matrix.cu` on native (non-WSL) Linux with the same 2× P2P GPUs
+produces output **byte-for-byte identical** to `matrix-wsl2.txt` — the deciding
+`cudaMemcpyPeerAsync`-inside-capture row reads `operation not permitted` on both.
+It is the same byte-identical CUDA 13.3 (V13.3.33) userspace install under two
+kernel/boot contexts, which pins the rejection to CUDA's runtime, independent of
+the kernel/driver layer. See `NATIVE-TEST.md` and (closed) GitHub issue #1;
+`matrix-native.txt` is gitignored.
 
-Because of this, **do not phrase the failure as a confirmed driver bug in
-docs/comments** — the existing prose deliberately hedges ("looks like", "pending
-native-Linux confirmation"). Preserve that framing until the native diff exists.
-The repository is simultaneously valid as a known-limitation + mitigation
-reference regardless of how the question resolves.
+Because of this, **do not reintroduce the "WSL driver bug" framing.** Earlier
+drafts hedged ("looks like", "pending native-Linux confirmation"); that hedge is
+now resolved in the *not-a-WSL-bug* direction — keep it that way unless new
+contradicting evidence appears. The repo stands as a known-limitation + mitigation
+reference; the capturable forms (D2D / Default-UVA / peer-access kernel) are the
+supported path.

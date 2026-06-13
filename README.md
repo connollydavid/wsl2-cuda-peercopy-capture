@@ -1,15 +1,21 @@
-# `cudaMemcpyPeerAsync` rejected during CUDA stream capture on WSL2
+# `cudaMemcpyPeerAsync` rejected during CUDA stream capture (WSL2 and native Linux)
 
-Minimal reproducer for a CUDA stream-capture limitation observed on WSL2.
+Minimal reproducer for a CUDA stream-capture limitation. First observed on WSL2;
+**confirmed identical on native Linux**, so it is general CUDA behaviour, not a
+WSL bug.
 
-> **Status (pending native-Linux confirmation):** the failure below is confirmed
-> on WSL2. Whether it is *WSL-specific* (a driver bug) or *general CUDA
-> behaviour* is decided by running `matrix.cu` on native Linux — see
-> [`NATIVE-TEST.md`](NATIVE-TEST.md). NVIDIA docs state peer copies *can* be
-> captured, so native behaviour is the deciding evidence. Do not treat the
-> "driver bug" framing as settled until that diff is in.
+> **Status — RESOLVED (native-Linux confirmed):** the rejection reproduces
+> *identically* on native (non-WSL) Linux with the same 2× Quadro RTX 6000 + P2P
+> (kernel `7.0.10-arch1-1`, driver 610.43.02, CUDA 13.3 V13.3.33). The native
+> `matrix.cu` table is **byte-for-byte identical** to
+> the WSL2 run (`diff matrix-wsl2.txt matrix-native.txt` → no output) — see
+> [`NATIVE-TEST.md`](NATIVE-TEST.md) and
+> [issue #1](https://github.com/connollydavid/wsl2-cuda-peercopy-capture/issues/1).
+> Verdict: this is **general CUDA behaviour, not WSL-specific** — `cudaMemcpyPeerAsync`
+> (and `cudaMemcpy3DPeerAsync`) are simply not capturable; the capturable
+> mitigations below are the supported path. Not an NVIDIA/WSL bug report.
 
-**The crux:** on WSL2, `cudaMemcpyPeerAsync` issued inside a stream capture fails
+**The crux:** `cudaMemcpyPeerAsync` issued inside a stream capture fails
 with `operation not permitted when stream is capturing`, while the
 *semantically identical* peer transfer expressed as
 `cudaMemcpyAsync(..., cudaMemcpyDeviceToDevice)` over peer-enabled pointers is
@@ -22,10 +28,10 @@ succeeds outside capture, and single-GPU graph capture works. Only
 
 | | |
 |---|---|
-| Platform | WSL2 (`6.18.33.1-microsoft-standard-WSL2`) |
+| Platform | WSL2 (`6.18.33.1-microsoft-standard-WSL2`) **and** native Linux (`7.0.10-arch1-1`, Arch) |
 | GPUs | 2× Quadro RTX 6000 (Turing TU102), NVLink, P2P enabled |
-| WSL display driver | 610.47 |
-| CUDA toolkit | 13.3 (V13.3.33); reproduced identically under 13.2 |
+| Driver | WSL display 610.47 · native 610.43.02 |
+| CUDA toolkit | 13.3 (V13.3.33) — same on both platforms |
 
 ## Build & run
 
@@ -84,19 +90,26 @@ remote pointer directly. Captured as a kernel node. Useful when the transfer is
 already fused with computation (e.g. a reduce/accumulate), avoiding a separate
 copy.
 
-## Expected behaviour / why this looks like a driver bug
+## Why one API and not the other
 
 Both forms in `workaround.cu` produce the same peer transfer as the rejected
-`cudaMemcpyPeerAsync`, and the WSL2 driver captures both without complaint. The rejection in case [4] is
-therefore an inconsistency in capture support for one API, not a fundamental P2P
-or graph-capture limitation. Per the CUDA Programming Guide, peer memcpy
-operations are representable as graph memcpy nodes and are expected to be
-capturable.
+`cudaMemcpyPeerAsync`, and both capture without complaint — identically on WSL2
+and native Linux. The rejection is therefore an API-level distinction in CUDA's
+capture support (`cudaMemcpyPeerAsync` / `cudaMemcpy3DPeerAsync` are not
+capturable; the explicit-peer copy expressed via UVA *is*), not a fundamental P2P
+or graph-capture limitation and not a WSL-specific defect.
 
-> Not verified in this repo's environment: behaviour on native (non-WSL) Linux.
-> This reproducer was run only on WSL2. The claim above rests on the CUDA
-> Programming Guide and on the internal inconsistency shown here, both of which
-> are independent of a native-Linux comparison.
+> **Native-Linux comparison (the deciding evidence):** running `matrix.cu` on
+> native Linux yields a table identical to the WSL2 run — the
+> `cudaMemcpyPeerAsync`-inside-capture row reads `operation not permitted` on
+> both, and built under matching CUDA 13.3 the two captures are byte-for-byte
+> identical — the *same* CUDA 13.3 (V13.3.33) userspace install run under two
+> kernel/boot contexts (WSL2's paravirtualized kernel and the native Linux
+> kernel). Identical userspace, identical result: the rejection lives in CUDA's
+> runtime, not the kernel/driver layer. Per `NATIVE-TEST.md`'s interpretation,
+> native = `operation not permitted` ⇒ general CUDA behaviour, not a WSL bug.
+> Treat the capturable forms above as the supported way to express a peer copy
+> inside a graph.
 
 ## Why it matters
 
@@ -111,5 +124,9 @@ restores it with no change to the non-capture path.
 
 - `repro.cu` — isolates the failure (cases [1]–[4]); prints a `RESULT:` verdict.
 - `workaround.cu` — demonstrates the two capturable mitigations (A) and (B).
-- `EXPECTED-OUTPUT.txt` — captured output of both binaries.
+- `matrix.cu` — platform-neutral peer-copy × capture-mode sweep; one table row per
+  case. Run on a second platform and diff against `matrix-wsl2.txt`.
+- `matrix-wsl2.txt` — captured sweep on WSL2; reproduced byte-for-byte on native Linux.
+- `EXPECTED-OUTPUT.txt` — captured output of `repro` and `workaround`.
+- `NATIVE-TEST.md` — the native-Linux confirmation procedure and its (now resolved) verdict.
 - `Makefile` — `make`, `make run`, `make clean`.
