@@ -1,12 +1,18 @@
-// Minimal reproducer: cudaMemcpyPeerAsync is rejected during CUDA stream
-// capture on WSL2, even though peer access is enabled, the same copy succeeds
-// outside capture, and single-GPU graph capture works. Only the *combination*
-// (a peer copy issued while a stream is capturing) fails.
+// Demonstrates what is and is not capturable when you want a peer-to-peer
+// (cross-device) copy inside a CUDA graph.
 //
-// Build: nvcc -o repro repro.cu
-// Run:   ./repro            (requires 2 P2P-capable GPUs)
+// The takeaway: cudaMemcpyPeerAsync works fine on its own, and single-GPU
+// stream capture works fine, but issuing cudaMemcpyPeerAsync *while a stream is
+// capturing* returns "operation not permitted when stream is capturing". It is
+// not capturable. This is CUDA runtime behaviour (identical on WSL2 and native
+// Linux), not a platform bug. To put a peer copy inside a captured graph, use
+// one of the capturable forms in capturable.cu.
 //
-// Exit status: 0 if the failure reproduced, 1 if it did not, 2 on setup error.
+// Build: nvcc -o demo demo.cu
+// Run:   ./demo            (requires 2 P2P-capable GPUs)
+//
+// Exit status: 0 if the system behaves as this guide describes (peer copy ok
+// outside capture, rejected inside), 1 if it does not, 2 on setup error.
 #include <cstdio>
 #include <cuda_runtime.h>
 
@@ -34,7 +40,7 @@ int main() {
     MUST(cudaDeviceCanAccessPeer(&can01, 0, 1));
     MUST(cudaDeviceCanAccessPeer(&can10, 1, 0));
     printf("  canAccessPeer 0->1=%d  1->0=%d\n", can01, can10);
-    if (!can01 || !can10) { fprintf(stderr, "GPUs are not P2P-capable; this repro needs P2P\n"); return 2; }
+    if (!can01 || !can10) { fprintf(stderr, "GPUs are not P2P-capable; this guide needs P2P\n"); return 2; }
     MUST(cudaSetDevice(0)); SHOW(cudaDeviceEnablePeerAccess(1, 0));
     MUST(cudaSetDevice(1)); SHOW(cudaDeviceEnablePeerAccess(0, 0));
 
@@ -63,7 +69,12 @@ int main() {
     printf("  cudaMemcpyPeerAsync                                      -> %s\n",
            cudaGetErrorString(out_err));
 
-    // [4] peer copy INSIDE capture -- the failure under test.
+    // [4] peer copy INSIDE capture -- the operation that is not capturable.
+    // cudaMemcpyPeerAsync has no graph-node representation: graph memcpy nodes
+    // are addressed by UVA pointer (cudaMemcpy3DParms), and there is no
+    // explicit-device-id "peer memcpy node" for the runtime to record this call
+    // as. So capture rejects it with "operation not permitted when stream is
+    // capturing", which then poisons the capture and fails cudaStreamEndCapture.
     printf("\n[4] cudaMemcpyPeerAsync INSIDE capture:\n");
     cudaGraph_t g2 = nullptr;
     SHOW(cudaStreamBeginCapture(s, cudaStreamCaptureModeThreadLocal));
@@ -74,10 +85,11 @@ int main() {
     printf("  cudaStreamEndCapture                                     -> %s\n",
            cudaGetErrorString(end_err));
 
-    // Verdict: the bug is "peer copy ok outside capture, rejected inside".
-    bool reproduced = (out_err == cudaSuccess) && (in_err != cudaSuccess);
-    printf("\nRESULT: %s\n", reproduced
-        ? "REPRODUCED -- cudaMemcpyPeerAsync rejected during capture, accepted outside"
-        : "NOT REPRODUCED on this system");
-    return reproduced ? 0 : 1;
+    // Expected: peer copy ok outside capture, rejected inside.
+    bool as_expected = (out_err == cudaSuccess) && (in_err != cudaSuccess);
+    printf("\nRESULT: %s\n", as_expected
+        ? "cudaMemcpyPeerAsync is NOT capturable (accepted outside capture, rejected inside). "
+          "Use a capturable form for peer copies inside a graph -- see capturable.cu."
+        : "this system does not match the guide (peer copy behaved unexpectedly)");
+    return as_expected ? 0 : 1;
 }

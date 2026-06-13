@@ -1,7 +1,8 @@
 # Captured on WSL2 (6.18.33.1-microsoft-standard-WSL2), 2x Quadro RTX 6000,
-# WSL display driver 610.47, CUDA 13.3 (V13.3.33). Reproduced identically under CUDA 13.2.
+# WSL display driver 610.47, CUDA 13.3 (V13.3.33). Reproduced identically under
+# CUDA 13.2 and on native (non-WSL) Linux -- see NATIVE-TEST.md.
 
-$ ./repro
+$ ./demo
 CUDA runtime 13.3, driver reports 13.3, 2 device(s)
 
 [1] peer access:
@@ -26,10 +27,10 @@ CUDA runtime 13.3, driver reports 13.3, 2 device(s)
   cudaMemcpyPeerAsync                                      -> operation not permitted when stream is capturing
   cudaStreamEndCapture                                     -> operation failed due to a previous error during capture
 
-RESULT: REPRODUCED -- cudaMemcpyPeerAsync rejected during capture, accepted outside
+RESULT: cudaMemcpyPeerAsync is NOT capturable (accepted outside capture, rejected inside). Use a capturable form for peer copies inside a graph -- see capturable.cu.
 [exit 0]
 
-$ ./workaround
+$ ./capturable
 [A] peer-access KERNEL inside capture (dev0 kernel reads dev1 ptr):
   cudaStreamBeginCapture(s, cudaStreamCaptureModeThreadLocal) -> no error
   cudaStreamEndCapture                                     -> no error
@@ -43,5 +44,5 @@ $ ./workaround
   cudaMemcpyAsync(D2D, peer)                               -> no error
   cudaStreamEndCapture                                     -> no error
 
-RESULT: kernel-node mitigation [A] OK; memcpy-node mitigation [B] OK
+RESULT: kernel-node form [A] OK; memcpy-node form [B] OK
 [exit 0]

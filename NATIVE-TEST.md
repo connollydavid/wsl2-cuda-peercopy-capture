@@ -1,22 +1,21 @@
-# Native-Linux confirmation (the dispositive test — DONE)
+# Cross-platform confirmation: WSL2 vs native Linux
 
-> Tracking ticket for the native run:
-> [issue #1](https://github.com/connollydavid/wsl2-cuda-peercopy-capture/issues/1).
+This note records the comparison that establishes the behaviour described in the
+[README](README.md) as general CUDA, not a WSL-specific quirk. Background:
+[issue #1](https://github.com/connollydavid/capturable-peer-copy-cuda/issues/1).
 
-## Result — native run completed (2026-06-13)
+## Result (2026-06-13)
 
-**Native Linux matches WSL2.** The same binary was run on native (non-WSL) Arch
-Linux with the same 2× Quadro RTX 6000 + P2P. The deciding
+**Native Linux matches WSL2, byte for byte.** `matrix.cu` was run on native
+(non-WSL) Arch Linux with the same 2× Quadro RTX 6000 + P2P. The
 `cudaMemcpyPeerAsync`-inside-capture row reads `operation not permitted` on
 native, exactly as on WSL2. Built under matching CUDA 13.3 (V13.3.33, from
-`/opt/cuda-13.3`), `diff matrix-wsl2.txt matrix-native.txt` produces **no output
-— byte-for-byte identical**.
+`/opt/cuda-13.3`), `diff matrix-wsl2.txt matrix-native.txt` produces no output.
 
-This is the **same byte-identical CUDA 13.3 (V13.3.33) userspace install**
-exercised under two slightly different kernel/boot contexts — WSL2's
-paravirtualized kernel and the native Linux kernel. Identical userspace yielding
-identical output isolates the rejection to CUDA's runtime itself, independent of
-the kernel/driver context; that independence is precisely why the behaviour is
+It is the same CUDA 13.3 (V13.3.33) userspace install exercised under two
+kernel/boot contexts: WSL2's paravirtualised kernel and the native Linux kernel.
+Identical userspace yielding identical output isolates the behaviour to CUDA's
+runtime, independent of the kernel/driver context. That independence is why it is
 not WSL-specific.
 
 | | |
@@ -26,36 +25,27 @@ not WSL-specific.
 | Driver | 610.43.02 |
 | CUDA toolkit | 13.3 (V13.3.33), `/opt/cuda-13.3` |
 
-**Verdict:** native = `operation not permitted` ⇒ **general CUDA behaviour, not
-WSL-specific. Not a WSL bug** (the second interpretation branch below). The repo
-stands as a known-limitation + mitigation reference.
+## Reproduce the comparison
 
-`matrix.cu` is the platform-neutral peer-copy-during-capture matrix. WSL2 output
-is captured in `matrix-wsl2.txt`. Run the same binary on **native (non-WSL)
-Linux** with the same 2× P2P GPUs and diff.
+`matrix.cu` is the platform-neutral peer-copy-during-capture sweep. WSL2 output
+is captured in `matrix-wsl2.txt`. Run the same binary on another platform and
+diff:
 
 ```sh
-git clone https://github.com/connollydavid/wsl2-cuda-peercopy-capture
-cd wsl2-cuda-peercopy-capture
+git clone https://github.com/connollydavid/capturable-peer-copy-cuda
+cd capturable-peer-copy-cuda
 nvcc -o matrix matrix.cu
 ./matrix | tee matrix-native.txt
-diff matrix-wsl2.txt matrix-native.txt
+diff matrix-wsl2.txt matrix-native.txt   # no output => identical behaviour
 ```
 
-## Interpretation
-
-The single deciding row is `cudaMemcpyPeerAsync` **inside capture**:
-
-- **Native = `no error` (replay OK)** → the prohibition is **WSL2-specific**. This
-  is a WSL CUDA-driver bug (captures on native, fails only on WSL).
-  Report it (see below). — *not what happened.*
-- **Native = `operation not permitted`** → the prohibition is **general CUDA
-  behaviour**, not WSL-specific. Not a WSL bug. The repo stands as a
-  known-limitation + mitigation reference; no NVIDIA report warranted (or, at
-  most, a docs-consistency note). — **← this is the observed result (see above).**
-
-WSL2 baseline for the deciding row (all three capture modes):
+The deciding row is `cudaMemcpyPeerAsync` inside capture. On both platforms, all
+three capture modes give:
 
 ```
 cudaMemcpyPeerAsync   peer=1   enqueue=operation not permitted when stream is capturing   end=ERR
 ```
+
+`no error` on a platform would mean the constraint is specific to that platform's
+driver; `operation not permitted` (what both platforms show) means it is general
+CUDA behaviour.

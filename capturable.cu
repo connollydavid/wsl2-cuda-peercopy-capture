@@ -1,7 +1,8 @@
-// Two capture-compatible ways to perform the same peer transfer that
-// cudaMemcpyPeerAsync cannot do during capture on WSL2. Both rely on peer
-// access being enabled (cudaDeviceEnablePeerAccess), which makes the remote
-// device pointer directly addressable on the local device via UVA:
+// Two capturable ways to express a peer-to-peer (cross-device) copy inside a
+// CUDA graph -- the supported alternatives to cudaMemcpyPeerAsync, which is not
+// capturable. Both rely on peer access being enabled
+// (cudaDeviceEnablePeerAccess), which makes the remote device pointer directly
+// addressable on the local device via UVA:
 //
 //   [A] a kernel on dev0 that reads a dev1 pointer  -> captured as a kernel node
 //   [B] cudaMemcpyAsync(..., DeviceToDevice) on UVA  -> captured as a memcpy node
@@ -9,10 +10,10 @@
 // Both are verified here to capture, instantiate, replay, and produce the
 // correct result across the peer boundary.
 //
-// Build: nvcc -o workaround workaround.cu
-// Run:   ./workaround       (requires 2 P2P-capable GPUs)
+// Build: nvcc -o capturable capturable.cu
+// Run:   ./capturable      (requires 2 P2P-capable GPUs)
 //
-// Exit status: 0 if both mitigations work, 1 if either fails, 2 on setup error.
+// Exit status: 0 if both forms work, 1 if either fails, 2 on setup error.
 #include <cstdio>
 #include <cuda_runtime.h>
 
@@ -36,7 +37,7 @@ int main() {
 
     int can = 0;
     MUST(cudaDeviceCanAccessPeer(&can, 0, 1));
-    if (!can) { fprintf(stderr, "GPUs are not P2P-capable; mitigations need peer access\n"); return 2; }
+    if (!can) { fprintf(stderr, "GPUs are not P2P-capable; both forms need peer access\n"); return 2; }
     MUST(cudaSetDevice(0)); MUST(cudaDeviceEnablePeerAccess(1, 0));
     MUST(cudaSetDevice(1)); MUST(cudaDeviceEnablePeerAccess(0, 0));
 
@@ -78,7 +79,7 @@ int main() {
     printf("  cudaStreamEndCapture                                     -> %s\n", cudaGetErrorString(b_end));
     bool b_ok = (b_mem == cudaSuccess) && (b_end == cudaSuccess);
 
-    printf("\nRESULT: kernel-node mitigation [A] %s; memcpy-node mitigation [B] %s\n",
+    printf("\nRESULT: kernel-node form [A] %s; memcpy-node form [B] %s\n",
            a_ok ? "OK" : "FAILED", b_ok ? "OK" : "FAILED");
     return (a_ok && b_ok) ? 0 : 1;
 }

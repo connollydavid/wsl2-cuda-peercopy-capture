@@ -1,24 +1,24 @@
 NVCC ?= nvcc
 
-all: repro workaround matrix
+all: demo capturable matrix
 
-repro: repro.cu
+demo: demo.cu
 	$(NVCC) -o $@ $<
 
-workaround: workaround.cu
+capturable: capturable.cu
 	$(NVCC) -o $@ $<
 
 matrix: matrix.cu
 	$(NVCC) -o $@ $<
 
 run: all
-	./repro
+	./demo
 	@echo
-	./workaround
+	./capturable
 	@echo
 	./matrix
 
 clean:
-	rm -f repro workaround matrix
+	rm -f demo capturable matrix
 
 .PHONY: all run clean
