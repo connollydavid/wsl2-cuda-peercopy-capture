@@ -1,3 +1,5 @@
 repro
 workaround
+matrix
+matrix-native.txt
 *.o

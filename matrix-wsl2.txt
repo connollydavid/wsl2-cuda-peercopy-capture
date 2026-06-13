@@ -1,0 +1,19 @@
+=== ENV: 2 x Quadro RTX 6000 | CUDA rt 13.3 drv 13.3 ===
+
+-- peer copy INSIDE capture, mode sweep (peer access ON) --
+  cudaMemcpyPeerAsync                peer=1 begin=ok       enqueue=operation not permitted when stream is capturing end=ERR      replay=-
+  cudaMemcpyPeerAsync                peer=1 begin=ok       enqueue=operation not permitted when stream is capturing end=ERR      replay=-
+  cudaMemcpyPeerAsync                peer=1 begin=ok       enqueue=operation not permitted when stream is capturing end=ERR      replay=-
+  cudaMemcpy3DPeerAsync              peer=1 begin=ok       enqueue=operation not permitted when stream is capturing end=ERR      replay=-
+
+-- capturable alternatives INSIDE capture (Relaxed) --
+  cudaMemcpyAsync D2D                peer=1 begin=ok       enqueue=no error                                       end=ok       replay=OK
+  cudaMemcpyAsync Default            peer=1 begin=ok       enqueue=no error                                       end=ok       replay=OK
+  peer-access kernel                 peer=1 begin=ok       enqueue=no error                                       end=ok       replay=OK
+
+-- peer access DISABLED (does D2D still capture? correct?) --
+  cudaMemcpyAsync D2D                peer=0 begin=ok       enqueue=no error                                       end=ok       replay=OK
+  cudaMemcpyPeerAsync                peer=0 begin=ok       enqueue=operation not permitted when stream is capturing end=ERR      replay=-
+
+-- baselines --
+  cudaMemcpyPeerAsync OUTSIDE                   enqueue=no error                                       replay=OK

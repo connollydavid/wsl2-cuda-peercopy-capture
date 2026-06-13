@@ -1,6 +1,6 @@
 NVCC ?= nvcc
 
-all: repro workaround
+all: repro workaround matrix
 
 repro: repro.cu
 	$(NVCC) -o $@ $<
@@ -8,12 +8,17 @@ repro: repro.cu
 workaround: workaround.cu
 	$(NVCC) -o $@ $<
 
+matrix: matrix.cu
+	$(NVCC) -o $@ $<
+
 run: all
 	./repro
 	@echo
 	./workaround
+	@echo
+	./matrix
 
 clean:
-	rm -f repro workaround
+	rm -f repro workaround matrix
 
 .PHONY: all run clean

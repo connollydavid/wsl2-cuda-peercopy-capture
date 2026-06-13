@@ -1,6 +1,13 @@
 # `cudaMemcpyPeerAsync` rejected during CUDA stream capture on WSL2
 
-Minimal reproducer for a WSL2-specific CUDA stream-capture limitation.
+Minimal reproducer for a CUDA stream-capture limitation observed on WSL2.
+
+> **Status (pending native-Linux confirmation):** the failure below is confirmed
+> on WSL2. Whether it is *WSL-specific* (a driver bug) or *general CUDA
+> behaviour* is decided by running `matrix.cu` on native Linux — see
+> [`NATIVE-TEST.md`](NATIVE-TEST.md). NVIDIA docs state peer copies *can* be
+> captured, so native behaviour is the deciding evidence. Do not treat the
+> "driver bug" framing as settled until that diff is in.
 
 **The crux:** on WSL2, `cudaMemcpyPeerAsync` issued inside a stream capture fails
 with `operation not permitted when stream is capturing`, while the
