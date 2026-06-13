@@ -47,7 +47,7 @@ diff matrix-wsl2.txt matrix-native.txt
 The single deciding row is `cudaMemcpyPeerAsync` **inside capture**:
 
 - **Native = `no error` (replay OK)** → the prohibition is **WSL2-specific**. This
-  is a WSL CUDA-driver bug (documented as capturable; works native, fails WSL).
+  is a WSL CUDA-driver bug (captures on native, fails only on WSL).
   Report it (see below). — *not what happened.*
 - **Native = `operation not permitted`** → the prohibition is **general CUDA
   behaviour**, not WSL-specific. Not a WSL bug. The repo stands as a
