@@ -1,5 +1,9 @@
 # Native-Linux confirmation (the dispositive test)
 
+> Tracking ticket for the native run:
+> [issue #1](https://github.com/connollydavid/wsl2-cuda-peercopy-capture/issues/1).
+> Paste `matrix-native.txt` + driver version there.
+
 `matrix.cu` is the platform-neutral peer-copy-during-capture matrix. WSL2 output
 is captured in `matrix-wsl2.txt`. Run the same binary on **native (non-WSL)
 Linux** with the same 2× P2P GPUs and diff.
